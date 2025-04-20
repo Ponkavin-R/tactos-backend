@@ -13,9 +13,15 @@ app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
+// Ensure the 'uploads' folder exists
+const fs = require("fs");
+if (!fs.existsSync("./uploads")) {
+  fs.mkdirSync("./uploads");
+}
+
 // MongoDB Connection
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("MongoDB connected successfully"))
   .catch((err) => console.log("MongoDB Connection Error:", err));
 
@@ -398,6 +404,45 @@ app.put("/api/careers/:id", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+app.get('/api/careers/:id', async (req, res) => {
+  try {
+    const job = await Career.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+    res.json(job);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Mongoose schema
+const recruitmentSchema = new mongoose.Schema({
+  name: String,
+  email: String,
+  phone: String,
+  resumeUrl: String,
+  jobId: String,
+  appliedAt: { type: Date, default: Date.now },
+});
+
+const Recruitment = mongoose.model("Recruitment", recruitmentSchema);
+
+// API route
+app.post("/api/recruitment/apply", upload.single("resume"), async (req, res) => {
+  try {
+    const { name, email, phone, jobId } = req.body;
+    const resumeUrl = req.file ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}` : "";
+
+    const newApplication = new Recruitment({ name, email, phone, resumeUrl, jobId });
+    await newApplication.save();
+
+    res.status(201).json({ message: "Application submitted successfully" });
+  } catch (err) {
+    console.error("Error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 
@@ -476,6 +521,72 @@ app.delete("/api/events/:id", async (req, res) => {
     res.status(500).json({ error: "Failed to delete event" });
   }
 });
+
+// Get a particular event by ID
+app.get("/api/events/:id", async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    res.status(200).json(event);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch event" });
+  }
+});
+
+
+// Mongoose Schema
+const registrationSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: { type: String, required: true },
+  eventId: { type: String, required: true },
+  eventName: { type: String, default: null },
+  eventType: { type: String, default: null },
+  screenshot: { type: String, default: null },
+});
+
+const EventRegistration = mongoose.model("eventregistration", registrationSchema);
+
+// Route to handle registration
+app.post("/api/register", upload.single("screenshot"), async (req, res) => {
+  try {
+    const { name, email, phone, eventId, eventName, eventType } = req.body;
+
+    // Log request data for debugging
+    console.log("Body:", req.body);
+    console.log("File:", req.file);
+
+    let screenshotPath = null;
+
+    if (eventType?.toLowerCase() === "paid") {
+      if (!req.file) {
+        return res.status(400).json({ error: "Screenshot is required for paid events" });
+      }
+      screenshotPath = `/uploads/${req.file.filename}`;
+    }
+
+    const newRegistration = new EventRegistration({
+      name,
+      email,
+      phone,
+      eventId,
+      eventName: eventName || null,
+      eventType: eventType || null,
+      screenshot: screenshotPath,
+    });
+
+    await newRegistration.save();
+    res.status(201).json({ message: "Event saved successfully!" });
+  } catch (err) {
+    console.error("Error saving event:", err);
+    res.status(500).json({ error: "Error saving event", detail: err.message });
+  }
+});
+
+
+
 
 
 // GET all cofounders
