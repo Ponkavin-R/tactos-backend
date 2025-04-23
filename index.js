@@ -36,21 +36,29 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Schema & Model
-const StartupSchema = new mongoose.Schema({
-  fullName: String,
-  email: String,
-  phone: String,
-  linkedin: String,
-  startupName: String,
-  industry: String,
-  stage: String,
-  website: String,
-  location: String,
-  incubation: String,
-  pitchDeck: String, // Stores file path
-  support: [String],
-  coFounder: String,
-});
+const StartupSchema = new mongoose.Schema(
+  {
+    fullName: String,
+    email: String,
+    phone: String,
+    linkedin: String,
+    startupName: String,
+    industry: String,
+    stage: String,
+    website: String,
+    location: String,
+    incubation: String,
+    pitchDeck: String, // Stores file path
+    support: [String],
+    coFounder: String,
+    status: {
+      type: String,
+      default: "hold", // or "pending", "hold"
+    },
+  },
+  { timestamps: true } // Automatically adds createdAt and updatedAt
+);
+
 
 const Startup = mongoose.model("startup-reg", StartupSchema);
 
@@ -70,30 +78,82 @@ app.post("/api/register", upload.single("pitchDeck"), async (req, res) => {
     res.status(500).json({ message: "Error saving data", error });
   }
 });
+// API Route to Get All Startups
+app.get("/api/startups", async (req, res) => {
+  try {
+    const startups = await Startup.find();
+    res.status(200).json(startups);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching startups", error });
+  }
+});
+
+// API Route to Delete a Startup
+app.delete("/api/startups/:id", async (req, res) => {
+  try {
+    await Startup.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "Startup deleted successfully!" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting startup", error });
+  }
+});
+// PUT /api/startups/hold/:id
+app.put("/api/startups/hold/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updated = await Startup.findByIdAndUpdate(id, { $set: { status: "hold" } }, { new: true });
+    if (!updated) {
+      return res.status(404).json({ message: "Startup not found" });
+    }
+    res.json({ message: "Startup held successfully", startup: updated });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error });
+  }
+});
+
+app.put('/api/startups/activate/:id', async (req, res) => {
+  try {
+    const startup = await Startup.findByIdAndUpdate(req.params.id, 
+      { status: 'active' }, { new: true }
+    );
+    if (!startup) {
+      return res.status(404).json({ message: 'Startup not found' });
+    }
+    res.status(200).json({ message: "Startup activated successfully", startup });
+  } catch (err) {
+    res.status(500).json({ message: 'Error activating startup', error: err });
+  }
+});
+
+
+
+
 
 
 
 
 // Define the schema
 const CofounderSchema = new mongoose.Schema({
-    fullName: String,
-    email: String,
-    phone: String,
-    linkedin: String,
-    location: String,
-    role: String,
-    expertise: String,
-    experience: Number,
-    achievements: String,
-    industries: [String],
-    stagePreference: String,
-    businessModel: String,
-    skills: [String],
-    expectedRole: String,
-    investmentCapacity: Number,
-    cofounderReason: String,
-    resume: String, // File path
-  });
+  fullName: String,
+  email: String,
+  phone: String,
+  linkedin: String,
+  location: String,
+  role: String,
+  expertise: String,
+  experience: Number,
+  achievements: String,
+  industries: [String],
+  stagePreference: String,
+  businessModel: String,
+  skills: [String],
+  expectedRole: String,
+  investmentCapacity: Number,
+  cofounderReason: String,
+  resume: String, // File path
+  hold: { type: Boolean, default: true },
+}, { timestamps: true }); // adds createdAt and updatedAt
+
   
   const Cofounder = mongoose.model("Cofounder", CofounderSchema);
   
@@ -104,16 +164,72 @@ const CofounderSchema = new mongoose.Schema({
       if (req.file) {
         formData.resume = `/uploads/${req.file.filename}`;
       }
-      
       const newCofounder = new Cofounder(formData);
       await newCofounder.save();
-  
       res.status(201).json({ message: "Registration successful!" });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server error. Please try again." });
     }
   });
+  
+
+  // GET all cofounders
+  app.get("/api/cofounders", async (req, res) => {
+    try {
+      const { search, filter, from, to, industry } = req.query;
+      const query = {};
+  
+      if (search && filter) {
+        query[filter] = { $regex: search, $options: "i" };
+      }
+  
+      if (industry) {
+        query.industries = industry;
+      }
+  
+      if (from || to) {
+        query.createdAt = {};
+        if (from) query.createdAt.$gte = new Date(from);
+        if (to) query.createdAt.$lte = new Date(to);
+      }
+  
+      const cofounders = await Cofounder.find(query).sort({ createdAt: -1 });
+      res.status(200).json(cofounders);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error fetching cofounders" });
+    }
+  });
+  
+
+// DELETE a cofounder
+app.delete("/api/cofounders/:id", async (req, res) => {
+  try {
+    await Cofounder.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "Cofounder deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete cofounder" });
+  }
+});
+
+app.put("/api/cofounders/:id/status", async (req, res) => {
+  try {
+    const { hold } = req.body;
+    const updated = await Cofounder.findByIdAndUpdate(
+      req.params.id,
+      { hold },
+      { new: true }
+    );
+    res.status(200).json(updated);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to update status" });
+  }
+});
+
+
+
 
 
 
@@ -200,30 +316,48 @@ const BusinessConsultationSchema = new mongoose.Schema({
 
 
   // Define Mongoose Schema & Model
-const formSchema = new mongoose.Schema({
+// ✅ Service Sub-Schema
+const serviceSchema = new mongoose.Schema({
+  name: String,
+  quote: Number,
+});
+
+// ✅ Main Form Schema
+const solutionSchema = new mongoose.Schema(
+  {
     startupName: String,
     founderName: String,
     email: String,
     phoneNumber: String,
-    service: [String],
-    needQuote: Boolean,
-    quoteAmount: Number,
-  });
-  
-  const FormData = mongoose.model("ITSolutions", formSchema);
-  
-  // Route to Handle Form Submission
-  app.post("/api/solutions", async (req, res) => {
-    try {
-      const newForm = new FormData(req.body);
-      await newForm.save();
-      res.status(201).json({ message: "Form submitted successfully" });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to submit form", details: error });
-    }
-  });
+    services: [serviceSchema],
+    status: {
+      type: String,
+      enum: ["new", "updated"],
+      default: "new",
+    },
+    registeredAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { timestamps: true }
+);
 
-  // Fetch all records
+// ✅ Mongoose Model
+const FormData = mongoose.model("ITSolutions", solutionSchema);
+
+// ✅ Create Record
+app.post("/api/solutions", async (req, res) => {
+  try {
+    const newForm = new FormData(req.body);
+    await newForm.save();
+    res.status(201).json({ message: "Form submitted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to submit form", details: error.message });
+  }
+});
+
+// ✅ Get All Records
 app.get("/api/solutions", async (req, res) => {
   try {
     const solutions = await FormData.find();
@@ -233,28 +367,17 @@ app.get("/api/solutions", async (req, res) => {
   }
 });
 
-// Add a new record
-app.post("/api/solutions", async (req, res) => {
-  try {
-    const newForm = new FormData(req.body);
-    await newForm.save();
-    res.status(201).json({ message: "Form submitted successfully" });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to submit form", details: error });
-  }
-});
-
-// Update a record
+// Update solution
 app.put("/api/solutions/:id", async (req, res) => {
-  try {
-    const updatedData = await FormData.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.status(200).json(updatedData);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update data" });
-  }
+  const updated = await FormData.findByIdAndUpdate(
+    req.params.id,
+    { ...req.body, status: "updated" },
+    { new: true }
+  );
+  res.json(updated);
 });
 
-// Delete a record
+// ✅ Delete a Record
 app.delete("/api/solutions/:id", async (req, res) => {
   try {
     await FormData.findByIdAndDelete(req.params.id);
@@ -264,7 +387,7 @@ app.delete("/api/solutions/:id", async (req, res) => {
   }
 });
 
-// Download Excel
+// ✅ Export Data to Excel
 app.get("/api/solutions/export", async (req, res) => {
   try {
     const solutions = await FormData.find();
@@ -276,20 +399,66 @@ app.get("/api/solutions/export", async (req, res) => {
       { header: "Founder Name", key: "founderName", width: 20 },
       { header: "Email", key: "email", width: 25 },
       { header: "Phone Number", key: "phoneNumber", width: 15 },
-      { header: "Service", key: "service", width: 20 },
-      { header: "Need Quote", key: "needQuote", width: 10 },
-      { header: "Quote Amount", key: "quoteAmount", width: 15 },
-      { header: "Status", key: "status", width: 10 },
+      { header: "Services", key: "services", width: 40 },
     ];
 
-    solutions.forEach((solution) => worksheet.addRow(solution));
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    solutions.forEach((solution) => {
+      worksheet.addRow({
+        startupName: solution.startupName,
+        founderName: solution.founderName,
+        email: solution.email,
+        phoneNumber: solution.phoneNumber,
+        services: solution.services.map(s => `${s.name} ($${s.quote})`).join(", "),
+      });
+    });
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
     res.setHeader("Content-Disposition", "attachment; filename=solutions.xlsx");
 
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    res.status(500).json({ error: "Failed to export data" });
+    res.status(500).json({ error: "Failed to export data", details: error.message });
+  }
+});
+
+const investorSchema = new mongoose.Schema({
+  type: String,
+  name: String,
+  image: String,
+});
+const OurInvestor = mongoose.model("OurInvestor", investorSchema);
+
+// API Route
+app.get("/api/ourinvestors", async (req, res) => {
+  try {
+    const data = await OurInvestor.find();
+    res.status(200).json(data);
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching investors", error: err });
+  }
+});
+
+// Mongoose Schema
+const testimonialSchema = new mongoose.Schema({
+  name: String,
+  image: String,
+  review: String,
+  rating: Number
+});
+
+const Testimonial = mongoose.model('Testimonial', testimonialSchema);
+
+// GET API for testimonials
+app.get('/api/testimonials', async (req, res) => {
+  try {
+    const testimonials = await Testimonial.find();
+    res.json(testimonials);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch testimonials' });
   }
 });
 
@@ -322,25 +491,6 @@ app.get("/api/stats", async (req, res) => {
 });
   
 
-// API Route to Get All Startups
-app.get("/api/startups", async (req, res) => {
-  try {
-    const startups = await Startup.find();
-    res.status(200).json(startups);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching startups", error });
-  }
-});
-
-// API Route to Delete a Startup
-app.delete("/api/startups/:id", async (req, res) => {
-  try {
-    await Startup.findByIdAndDelete(req.params.id);
-    res.status(200).json({ message: "Startup deleted successfully!" });
-  } catch (error) {
-    res.status(500).json({ message: "Error deleting startup", error });
-  }
-});
 
 
 const careerSchema = new mongoose.Schema({
@@ -422,8 +572,19 @@ const recruitmentSchema = new mongoose.Schema({
   email: String,
   phone: String,
   resumeUrl: String,
-  jobId: String,
-  appliedAt: { type: Date, default: Date.now },
+  jobId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Career', // Link to careers collection
+  },
+  appliedAt: {
+    type: Date,
+    default: Date.now,
+  },
+  status: {
+    type: String,
+    enum: ['new', 'viewed', 'shortlisted'],
+    default: 'new',
+  },
 });
 
 const Recruitment = mongoose.model("Recruitment", recruitmentSchema);
@@ -434,13 +595,120 @@ app.post("/api/recruitment/apply", upload.single("resume"), async (req, res) => 
     const { name, email, phone, jobId } = req.body;
     const resumeUrl = req.file ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}` : "";
 
-    const newApplication = new Recruitment({ name, email, phone, resumeUrl, jobId });
+    const newApplication = new Recruitment({ name, email, phone, resumeUrl, jobId, });
     await newApplication.save();
 
     res.status(201).json({ message: "Application submitted successfully" });
   } catch (err) {
     console.error("Error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/applicants", async (req, res) => {
+  try {
+    const applicants = await Recruitment.find({ status: "new" }).populate("jobId", "role");
+    res.json(applicants);
+  } catch (err) {
+    console.error("Error fetching applicants:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/recruitments", async (req, res) => {
+  try {
+    const { search = "", status = "" } = req.query;
+
+    const query = {
+      ...(status ? { status } : {}),
+      ...(search
+        ? {
+            $or: [
+              { name: new RegExp(search, "i") },
+              { email: new RegExp(search, "i") },
+              { phone: new RegExp(search, "i") }
+            ]
+          }
+        : {})
+    };
+
+    const applicants = await Recruitment.find(query).populate("jobId", "role");
+    res.json(applicants);
+  } catch (err) {
+    console.error("Error fetching applicants:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.put("/api/recruitments/:id", async (req, res) => {
+  try {
+    const { name, email, phone, status } = req.body;
+
+    const updated = await Recruitment.findByIdAndUpdate(
+      req.params.id,
+      { name, email, phone, status },
+      { new: true }
+    );
+
+    res.json(updated);
+  } catch (err) {
+    console.error("Error updating applicant:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.delete("/api/recruitments/:id", async (req, res) => {
+  try {
+    await Recruitment.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting applicant:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+const ExcelJS = require("exceljs");
+
+app.get("/api/recruitments/export", async (req, res) => {
+  try {
+    const data = await Recruitment.find().populate("jobId", "role");
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Applicants");
+
+    worksheet.columns = [
+      { header: "Name", key: "name" },
+      { header: "Email", key: "email" },
+      { header: "Phone", key: "phone" },
+      { header: "Job Role", key: "role" },
+      { header: "Status", key: "status" },
+      { header: "Resume URL", key: "resumeUrl" },
+      { header: "Applied At", key: "appliedAt" }
+    ];
+
+    data.forEach((app) => {
+      worksheet.addRow({
+        name: app.name,
+        email: app.email,
+        phone: app.phone,
+        role: app.jobId?.role || "N/A",
+        status: app.status,
+        resumeUrl: app.resumeUrl,
+        appliedAt: app.appliedAt.toISOString()
+      });
+    });
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", "attachment; filename=applicants.xlsx");
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("Error exporting Excel:", err);
+    res.status(500).json({ message: "Failed to export Excel" });
   }
 });
 
@@ -586,28 +854,6 @@ app.post("/api/register", upload.single("screenshot"), async (req, res) => {
 });
 
 
-
-
-
-// GET all cofounders
-app.get("/api/cofounders", async (req, res) => {
-  try {
-    const cofounders = await Cofounder.find();
-    res.status(200).json(cofounders);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching cofounders" });
-  }
-});
-
-// DELETE a cofounder
-app.delete("/api/cofounders/:id", async (req, res) => {
-  try {
-    await Cofounder.findByIdAndDelete(req.params.id);
-    res.status(200).json({ message: "Cofounder deleted" });
-  } catch (error) {
-    res.status(500).json({ message: "Failed to delete cofounder" });
-  }
-});
 
 
 // GET all businesses
