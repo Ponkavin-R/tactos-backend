@@ -50,6 +50,11 @@ const StartupSchema = new mongoose.Schema(
     incubation: String,
     pitchDeck: String, // Stores file path
     support: [String],
+    password: {
+      type: String,
+      required: true
+    },
+    
     coFounder: String,
     status: {
       type: String,
@@ -66,10 +71,16 @@ const Startup = mongoose.model("startup-reg", StartupSchema);
 app.post("/api/register", upload.single("pitchDeck"), async (req, res) => {
   try {
     const formData = req.body;
+    
     if (req.file) {
       formData.pitchDeck = `/uploads/${req.file.filename}`;
     }
-    
+
+    // Generate password using first 3 letters of fullName and startupName
+    const namePart = (formData.fullName || "").slice(0, 3);
+    const startupPart = (formData.startupName || "").slice(0, 3);
+    formData.password = (namePart + startupPart).toLowerCase();
+
     const newStartup = new Startup(formData);
     await newStartup.save();
 
@@ -78,6 +89,7 @@ app.post("/api/register", upload.single("pitchDeck"), async (req, res) => {
     res.status(500).json({ message: "Error saving data", error });
   }
 });
+
 // API Route to Get All Startups
 app.get("/api/startups", async (req, res) => {
   try {
@@ -126,7 +138,231 @@ app.put('/api/startups/activate/:id', async (req, res) => {
 });
 
 
+// GET /api/startups/:id - Get a specific startup by ID
+app.get("/api/startups/:id", async (req, res) => {
+  try {
+    const startup = await Startup.findById(req.params.id);
+    if (!startup) {
+      return res.status(404).json({ message: "Startup not found" });
+    }
+    res.status(200).json(startup);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching startup", error });
+  }
+});
+// PUT /api/startups/:id - Update full startup data
+app.put("/api/startups/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedStartup = await Startup.findByIdAndUpdate(id, req.body, { new: true });
 
+    if (!updatedStartup) {
+      return res.status(404).json({ message: "Startup not found" });
+    }
+
+    res.status(200).json({ message: "Startup updated successfully", startup: updatedStartup });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating startup", error });
+  }
+});
+
+// Install bcryptjs to hash passwords if needed (currently plain password is generated during register)
+
+// Login Startup
+app.post('/api/startup-login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const startup = await Startup.findOne({ email });
+
+    if (!startup) {
+      return res.status(404).json({ message: 'Startup not found' });
+    }
+
+    // Match password
+    if (startup.password !== password) {
+      return res.status(401).json({ message: 'Invalid password' });
+    }
+
+    res.status(200).json({
+      message: 'Login successful',
+      startup: {
+        id: startup._id,
+        fullName: startup.fullName,
+        email: startup.email,
+        status: startup.status,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error logging in', error });
+  }
+});
+
+
+
+// Funding Schema
+const fundingSchema = new mongoose.Schema(
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "Startup", required: true },
+    youtube: String,
+    location: String,
+    sector: String,
+    shortDescription: String,
+    longDescription: String,
+    logoUrl: String,
+    stage: String,
+    status: {
+      type: String,
+      enum: ["waiting", "approved"],
+      default: "waiting",
+    },
+  },
+  { timestamps: true }
+);
+
+const Funding = mongoose.model('Funding', fundingSchema);
+
+// GET /api/fundings/me
+app.get('/api/fundings/me', async (req, res) => {
+  try {
+    const userId = req.query.userId; // get from query
+    const fundings = await Funding.find({ userId });
+    res.json(fundings);
+  } catch (err) {
+    console.error('Error fetching fundings:', err);
+    res.status(500).json({ error: 'Failed to fetch fundings' });
+  }
+});
+
+// POST /api/fundings
+app.post('/api/fundings', upload.single('logo'), async (req, res) => {
+  try {
+    const userId = req.body.userId; // Get from body (change if you use auth middleware)
+    const { youtube, location, sector, shortDescription, longDescription, stage } = req.body;
+    const logoUrl = req.file ? `/uploads/${req.file.filename}` : '';
+
+    const funding = new Funding({
+      userId,
+      youtube,
+      location,
+      sector,
+      shortDescription,
+      longDescription,
+      stage,
+      status: 'waiting',
+      logoUrl,
+    });
+
+    await funding.save();
+    res.status(201).json({ message: 'Funding entry created', funding });
+  } catch (err) {
+    console.error('Error creating funding:', err);
+    res.status(500).json({ error: 'Failed to create funding' });
+  }
+});
+
+// DELETE /api/fundings/:id
+app.delete('/api/fundings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await Funding.findByIdAndDelete(id);
+
+    if (!deleted) {
+      return res.status(404).json({ message: 'Funding not found' });
+    }
+
+    res.status(200).json({ message: 'Funding deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting funding:', err);
+    res.status(500).json({ error: 'Failed to delete funding' });
+  }
+});
+
+// PUT /api/fundings/approve/:id (admin only)
+app.put('/api/fundings/approve/:id', async (req, res) => {
+  try {
+    const funding = await Funding.findById(req.params.id);
+    if (!funding) return res.status(404).json({ error: 'Funding not found' });
+
+    funding.status = 'approved';
+    await funding.save();
+    res.json({ message: 'Funding approved', funding });
+  } catch (err) {
+    console.error('Error approving funding:', err);
+    res.status(500).json({ error: 'Failed to approve funding' });
+  }
+});
+
+// PUT /api/fundings/:id (update with new image if provided)
+app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
+  try {
+    const { youtube, location, sector, shortDescription, longDescription, stage } = req.body;
+    const { id } = req.params;
+
+    const funding = await Funding.findById(id);
+    if (!funding) {
+      return res.status(404).json({ error: 'Funding not found' });
+    }
+
+    funding.youtube = youtube;
+    funding.location = location;
+    funding.sector = sector;
+    funding.shortDescription = shortDescription;
+    funding.longDescription = longDescription;
+    funding.stage = stage;
+
+    if (req.file) {
+      funding.logoUrl = `/uploads/${req.file.filename}`;
+    }
+
+    await funding.save();
+    res.json({ message: 'Funding updated', funding });
+  } catch (err) {
+    console.error('Error updating funding:', err);
+    res.status(500).json({ error: 'Failed to update funding' });
+  }
+});
+
+// GET /api/fundings/:id
+app.get('/api/fundings/:id', async (req, res) => {
+  try {
+    const funding = await Funding.findById(req.params.id);
+    if (!funding) {
+      return res.status(404).json({ error: 'Funding not found' });
+    }
+    res.json(funding);
+  } catch (err) {
+    console.error('Error fetching funding:', err);
+    res.status(500).json({ error: 'Failed to fetch funding' });
+  }
+});
+
+
+
+
+app.get('/api/dashboard/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    console.log('Fetching data for userId:', userId);  // Log the userId
+
+    // Check if the userId is valid (24 characters long)
+    if (userId.length !== 24) {
+      return res.status(400).json({ error: 'Invalid userId format' });
+    }
+
+    // Fetch funding data based on userId
+    const fundings = await Funding.countDocuments({ userId });
+
+    console.log('Fetched funding count:', fundings);  // Log the fetched funding count
+
+    res.json({
+      fundings,
+    });
+  } catch (error) {
+    console.error('Error fetching funding data:', error);  // Log the error details
+    res.status(500).json({ error: 'Failed to fetch funding data' });
+  }
+});
 
 
 
