@@ -213,7 +213,7 @@ const fundingSchema = new mongoose.Schema(
     stage: String,
     status: {
       type: String,
-      enum: ["waiting", "approved"],
+      enum: ["waiting", "approved","on hold"],
       default: "waiting",
     },
   },
@@ -221,6 +221,7 @@ const fundingSchema = new mongoose.Schema(
 );
 
 const Funding = mongoose.model('Funding', fundingSchema);
+
 
 // GET /api/fundings/me
 app.get('/api/fundings/me', async (req, res) => {
@@ -293,6 +294,32 @@ app.put('/api/fundings/approve/:id', async (req, res) => {
   }
 });
 
+app.put('/api/fundings/hold/:id', async (req, res) => {
+  const fundingId = req.params.id;
+
+  try {
+    // Find the funding by its ID
+    const funding = await Funding.findById(fundingId);
+
+    if (!funding) {
+      return res.status(404).json({ message: 'Funding not found' });
+    }
+
+    // Update the funding status to 'on hold'
+    funding.status = 'on hold';
+    
+    // Save the updated funding back to the database
+    const updatedFunding = await funding.save();
+    
+    // Send the updated funding as a response
+    res.status(200).json(updatedFunding);
+  } catch (error) {
+    console.error('Error holding funding:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
 // PUT /api/fundings/:id (update with new image if provided)
 app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
   try {
@@ -334,6 +361,16 @@ app.get('/api/fundings/:id', async (req, res) => {
   } catch (err) {
     console.error('Error fetching funding:', err);
     res.status(500).json({ error: 'Failed to fetch funding' });
+  }
+});
+
+// API Route to Get All Fundings
+app.get("/api/fundings", async (req, res) => {
+  try {
+    const fundings = await Funding.find();
+    res.status(200).json(fundings);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching fundings", error });
   }
 });
 
@@ -661,14 +698,16 @@ app.get("/api/solutions/export", async (req, res) => {
   }
 });
 
+// Mongoose Schema for Investor
 const investorSchema = new mongoose.Schema({
   type: String,
   name: String,
   image: String,
 });
+
 const OurInvestor = mongoose.model("OurInvestor", investorSchema);
 
-// API Route
+// API Route to Fetch Investors
 app.get("/api/ourinvestors", async (req, res) => {
   try {
     const data = await OurInvestor.find();
@@ -677,6 +716,44 @@ app.get("/api/ourinvestors", async (req, res) => {
     res.status(500).json({ message: "Error fetching investors", error: err });
   }
 });
+
+// API Route to Add a New Investor
+app.post("/api/ourinvestors", async (req, res) => {
+  try {
+    const { type, name, image } = req.body;
+    const newInvestor = new OurInvestor({ type, name, image });
+    await newInvestor.save();
+    res.status(201).json(newInvestor);
+  } catch (err) {
+    res.status(500).json({ message: "Error adding investor", error: err });
+  }
+});
+
+// API Route to Update an Investor
+app.put("/api/ourinvestors/:id", async (req, res) => {
+  try {
+    const { type, name, image } = req.body;
+    const updatedInvestor = await OurInvestor.findByIdAndUpdate(
+      req.params.id,
+      { type, name, image },
+      { new: true }
+    );
+    res.status(200).json(updatedInvestor);
+  } catch (err) {
+    res.status(500).json({ message: "Error updating investor", error: err });
+  }
+});
+
+// API Route to Delete an Investor
+app.delete("/api/ourinvestors/:id", async (req, res) => {
+  try {
+    await OurInvestor.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "Investor deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Error deleting investor", error: err });
+  }
+});
+
 
 // Mongoose Schema
 const testimonialSchema = new mongoose.Schema({
@@ -697,6 +774,42 @@ app.get('/api/testimonials', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch testimonials' });
   }
 });
+// POST - create a new testimonial
+app.post('/api/testimonials', async (req, res) => {
+  try {
+    const { name, image, review, rating } = req.body;
+    const newTestimonial = new Testimonial({ name, image, review, rating });
+    await newTestimonial.save();
+    res.status(201).json(newTestimonial);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create testimonial' });
+  }
+});
+
+// PUT - update a testimonial
+app.put('/api/testimonials/:id', async (req, res) => {
+  try {
+    const { name, image, review, rating } = req.body;
+    const updatedTestimonial = await Testimonial.findByIdAndUpdate(
+      req.params.id,
+      { name, image, review, rating },
+      { new: true }
+    );
+    res.json(updatedTestimonial);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update testimonial' });
+  }
+});
+
+// DELETE - delete a testimonial
+app.delete('/api/testimonials/:id', async (req, res) => {
+  try {
+    await Testimonial.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Testimonial deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete testimonial' });
+  }
+});
 
 
   // Backend Update - Express API
@@ -710,6 +823,7 @@ app.get("/api/stats", async (req, res) => {
     const career= await Career.countDocuments();
     const events= await Event.countDocuments();
     const solution= await FormData.countDocuments();
+    const fundingCount= await Funding.countDocuments();
 
     res.status(200).json({
       startupCount,
@@ -719,6 +833,7 @@ app.get("/api/stats", async (req, res) => {
       career,
       events,
       solution,
+      fundingCount,
     });
   } catch (error) {
     console.error("Error fetching stats:", error);
