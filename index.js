@@ -459,6 +459,74 @@ app.get('/api/dashboard/:userId', async (req, res) => {
 });
 
 
+// --- Career Schema & Model ---
+const jobSchema = new mongoose.Schema({
+  userId: String,
+  company: String,
+  logo: String,
+  isNew: Boolean,
+  featured: Boolean,
+  position: String,
+  role: String,
+  level: String,
+  postedAt: String,
+  contract: String,
+  district: String,
+  salary: String,
+  experience: String,
+  dateOfJoining: String,
+  languages: [String],
+  tools: [String],
+});
+
+const Job = mongoose.model("Job", jobSchema);
+
+// --- API Routes ---
+
+// Get all jobs
+app.get("/api/jobs", async (req, res) => {
+  try {
+    const jobs = await Job.find();
+    res.json(jobs);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch jobs" });
+  }
+});
+
+// Add a job
+app.post("/api/jobs", async (req, res) => {
+  try {
+    const job = new Job(req.body);
+    await job.save();
+    res.status(201).json(job);
+  } catch (err) {
+    res.status(400).json({ error: "Failed to add job", details: err.message });
+  }
+});
+
+// Update a job
+app.put("/api/jobs/:id", async (req, res) => {
+  try {
+    const updated = await Job.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
+    if (!updated) return res.status(404).json({ error: "Job not found" });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: "Failed to update job", details: err.message });
+  }
+});
+
+// Delete a job
+app.delete("/api/jobs/:id", async (req, res) => {
+  try {
+    const deleted = await Job.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Job not found" });
+    res.json({ message: "Job deleted" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete job", details: err.message });
+  }
+});
 
 
 
