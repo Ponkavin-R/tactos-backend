@@ -374,6 +374,63 @@ app.get("/api/fundings", async (req, res) => {
   }
 });
 
+// 1. MongoDB Schema
+const interestSchema = new mongoose.Schema({
+  fundingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Funding', // Assuming you have a 'Funding' model
+    required: true,
+  },
+  type: {
+    type: String,
+    enum: ['Individual', 'Organization'],
+    required: false, // You can make it true if you collect in form
+  },
+  name: {
+    type: String,
+    required: false,
+  },
+  email: {
+    type: String,
+    required: false,
+  },
+  phone: {
+    type: String,
+    required: false,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  }
+});
+
+const Interest = mongoose.model('Interest', interestSchema);
+
+// 2. POST API to Submit Interest
+app.post('/api/interests', async (req, res) => {
+  try {
+    const { fundingId, type, name, email, phone } = req.body;
+
+    if (!fundingId) {
+      return res.status(400).json({ message: 'Funding ID is required' });
+    }
+
+    const newInterest = new Interest({
+      fundingId,
+      type,
+      name,
+      email,
+      phone,
+    });
+
+    await newInterest.save();
+
+    res.status(201).json({ message: 'Interest submitted successfully!' });
+  } catch (error) {
+    console.error('Error submitting interest:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
 
 
 
