@@ -4,14 +4,31 @@ const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
 require("dotenv").config();
-
+const nodemailer = require('nodemailer');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:3000','http://localhost:3001', 'https://www.tactos.in','https://tactosadmin.vercel.app'], // adjust as needed
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+}));
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
+app.get("/", (req, res) => {
+  res.send("API is running");
+});
+let otpStore = {};
+// Configure your email transporter (use your SMTP credentials)
+const transporter = nodemailer.createTransport({
+  service: 'Gmail', // or use your SMTP service provider
+  auth: {
+    user: process.env.SMTP_EMAIL, // your email
+    pass: process.env.SMTP_PASSWORD, // your email password or app password
+  },
+});
+
 
 // Ensure the 'uploads' folder exists
 const fs = require("fs");
@@ -67,11 +84,56 @@ const StartupSchema = new mongoose.Schema(
 
 const Startup = mongoose.model("startup-reg", StartupSchema);
 
+// Send OTP
+app.post('/api/send-otp', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  otpStore[email] = otp;
+
+  const mailOptions = {
+    from: process.env.SMTP_EMAIL,
+    to: email,
+    subject: 'Your OTP for TACTOS Startup Registration',
+    text: `Your OTP is: ${otp}. It will expire in 5 minutes.`,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    res.status(200).json({ success: true, message: 'OTP sent successfully' });
+
+    // Clear OTP after 5 mins
+    setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed to send OTP' });
+  }
+});
+
+// Verify OTP
+app.post('/api/verify-otp', (req, res) => {
+  const { email, otp } = req.body;
+  if (otpStore[email] === otp) {
+    delete otpStore[email];
+    res.status(200).json({ success: true });
+  } else {
+    res.status(400).json({ success: false, message: 'Incorrect OTP' });
+  }
+});
+
+// API Route to Handle Form Submission
 // API Route to Handle Form Submission
 app.post("/api/register", upload.single("pitchDeck"), async (req, res) => {
   try {
     const formData = req.body;
-    
+
+    // Check if email is already registered
+    const existingStartup = await Startup.findOne({ email: formData.email });
+    if (existingStartup) {
+      return res.status(400).json({ message: "Email already registered. Please log in or use a different email." });
+    }
+
     if (req.file) {
       formData.pitchDeck = `/uploads/${req.file.filename}`;
     }
@@ -79,16 +141,43 @@ app.post("/api/register", upload.single("pitchDeck"), async (req, res) => {
     // Generate password using first 3 letters of fullName and startupName
     const namePart = (formData.fullName || "").slice(0, 3);
     const startupPart = (formData.startupName || "").slice(0, 3);
-    formData.password = (namePart + startupPart).toLowerCase();
+    const generatedPassword = (namePart + startupPart).toLowerCase();
+
+    formData.password = generatedPassword;
 
     const newStartup = new Startup(formData);
     await newStartup.save();
 
-    res.status(201).json({ message: "Startup registered successfully!" });
+    // Send email with login credentials
+    const mailOptions = {
+      from: process.env.SMTP_EMAIL,
+      to: formData.email,
+      subject: 'Your Startup Registration Credentials',
+      html: `
+        <h3>Welcome to Tactos!</h3>
+        <p>Dear ${formData.fullName},</p>
+        <p>Your startup <strong>${formData.startupName}</strong> has been registered successfully.</p>
+        <p>Here are your login credentials:</p>
+        <ul>
+          <li><strong>Email:</strong> ${formData.email}</li>
+          <li><strong>Password:</strong> ${generatedPassword}</li>
+        </ul>
+        <p>Use these credentials to log in and manage your startup profile.</p>
+        <br/>
+        <p>Best regards,<br/>Tactos Team</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(201).json({ message: "Startup registered and credentials sent to email!" });
   } catch (error) {
+    console.error("Error during registration:", error);
     res.status(500).json({ message: "Error saving data", error });
   }
 });
+
+
 
 // API Route to Get All Startups
 app.get("/api/startups", async (req, res) => {
@@ -168,8 +257,9 @@ app.put("/api/startups/:id", async (req, res) => {
 
 // Install bcryptjs to hash passwords if needed (currently plain password is generated during register)
 
-// Login Startup
 app.post('/api/startup-login', async (req, res) => {
+  console.log('Request body:', req.body);
+
   const { email, password } = req.body;
 
   try {
@@ -179,8 +269,14 @@ app.post('/api/startup-login', async (req, res) => {
       return res.status(404).json({ message: 'Startup not found' });
     }
 
-    // Match password
+    // Compare password exactly as is (case-sensitive)
     if (startup.password !== password) {
+      console.log("Email from req.body:", email);
+console.log("Password from req.body:", password);
+console.log("Startup from DB:", startup);
+console.log("Password from req.body:", req.body.password);
+console.log("Password in DB:", user.password);
+
       return res.status(401).json({ message: 'Invalid password' });
     }
 
@@ -200,7 +296,8 @@ app.post('/api/startup-login', async (req, res) => {
 
 
 
-// Funding Schema
+
+// ------------------ SCHEMA ------------------ //
 const fundingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "Startup", required: true },
@@ -213,8 +310,21 @@ const fundingSchema = new mongoose.Schema(
     stage: String,
     status: {
       type: String,
-      enum: ["waiting", "approved","on hold"],
+      enum: ["waiting", "approved", "on hold"],
       default: "waiting",
+    },
+
+    // ✅ New Fields
+    amountSeeking: Number,
+    equityOffered: Number,
+    valuation: Number,
+    fundUsage: String,
+    minimumInvestment: Number,
+    ticketSize: Number,
+    roleProvided: String,
+    amountRaised: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true }
@@ -222,11 +332,39 @@ const fundingSchema = new mongoose.Schema(
 
 const Funding = mongoose.model('Funding', fundingSchema);
 
+// ------------------ ROUTES ------------------ //
+
+app.put('/api/fundings/update-status/:id', async (req, res) => {
+  const { status } = req.body;
+
+  if (!["waiting", "approved", "on hold"].includes(status)) {
+    return res.status(400).json({ message: "Invalid status value" });
+  }
+
+  try {
+    const updatedFunding = await Funding.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    );
+
+    if (!updatedFunding) {
+      return res.status(404).json({ message: 'Funding not found' });
+    }
+
+    res.status(200).json({
+      message: 'Status updated successfully',
+      data: updatedFunding,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error });
+  }
+});
 
 // GET /api/fundings/me
 app.get('/api/fundings/me', async (req, res) => {
   try {
-    const userId = req.query.userId; // get from query
+    const userId = req.query.userId;
     const fundings = await Funding.find({ userId });
     res.json(fundings);
   } catch (err) {
@@ -238,9 +376,25 @@ app.get('/api/fundings/me', async (req, res) => {
 // POST /api/fundings
 app.post('/api/fundings', upload.single('logo'), async (req, res) => {
   try {
-    const userId = req.body.userId; // Get from body (change if you use auth middleware)
-    const { youtube, location, sector, shortDescription, longDescription, stage } = req.body;
-    const logoUrl = req.file ? `/uploads/${req.file.filename}` : '';
+    const {
+      userId,
+      youtube,
+      location,
+      sector,
+      shortDescription,
+      longDescription,
+      stage,
+      amountSeeking,
+      equityOffered,
+      valuation,
+      fundUsage,
+      minimumInvestment,
+      ticketSize,
+      roleProvided,
+      amountRaised,
+    } = req.body;
+
+    const logoUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
 
     const funding = new Funding({
       userId,
@@ -250,8 +404,18 @@ app.post('/api/fundings', upload.single('logo'), async (req, res) => {
       shortDescription,
       longDescription,
       stage,
-      status: 'waiting',
       logoUrl,
+      status: 'waiting',
+
+      // Set new fields
+      amountSeeking,
+      equityOffered,
+      valuation,
+      fundUsage,
+      minimumInvestment,
+      ticketSize,
+      roleProvided,
+      amountRaised,
     });
 
     await funding.save();
@@ -279,7 +443,7 @@ app.delete('/api/fundings/:id', async (req, res) => {
   }
 });
 
-// PUT /api/fundings/approve/:id (admin only)
+// PUT /api/fundings/approve/:id
 app.put('/api/fundings/approve/:id', async (req, res) => {
   try {
     const funding = await Funding.findById(req.params.id);
@@ -294,24 +458,14 @@ app.put('/api/fundings/approve/:id', async (req, res) => {
   }
 });
 
+// PUT /api/fundings/hold/:id
 app.put('/api/fundings/hold/:id', async (req, res) => {
-  const fundingId = req.params.id;
-
   try {
-    // Find the funding by its ID
-    const funding = await Funding.findById(fundingId);
+    const funding = await Funding.findById(req.params.id);
+    if (!funding) return res.status(404).json({ message: 'Funding not found' });
 
-    if (!funding) {
-      return res.status(404).json({ message: 'Funding not found' });
-    }
-
-    // Update the funding status to 'on hold'
     funding.status = 'on hold';
-    
-    // Save the updated funding back to the database
     const updatedFunding = await funding.save();
-    
-    // Send the updated funding as a response
     res.status(200).json(updatedFunding);
   } catch (error) {
     console.error('Error holding funding:', error);
@@ -319,18 +473,55 @@ app.put('/api/fundings/hold/:id', async (req, res) => {
   }
 });
 
+// PUT /api/fundings/amount/:id
+app.put('/api/update-amount/:id', async (req, res) => {
+  const { id } = req.params;
+  const { amountRaised } = req.body;
 
-// PUT /api/fundings/:id (update with new image if provided)
-app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
   try {
-    const { youtube, location, sector, shortDescription, longDescription, stage } = req.body;
-    const { id } = req.params;
+    const updated = await Funding.findByIdAndUpdate(
+      id,
+      { amountRaised },
+      { new: true }
+    );
 
-    const funding = await Funding.findById(id);
-    if (!funding) {
-      return res.status(404).json({ error: 'Funding not found' });
+    if (!updated) {
+      return res.status(404).json({ message: "Funding not found" });
     }
 
+    res.json(updated);
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+// PUT /api/fundings/:id (update with or without new image)
+app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
+  try {
+    const {
+      youtube,
+      location,
+      sector,
+      shortDescription,
+      longDescription,
+      stage,
+      amountSeeking,
+      equityOffered,
+      valuation,
+      fundUsage,
+      minimumInvestment,
+      ticketSize,
+      roleProvided,
+      amountRaised,
+    } = req.body;
+
+    const { id } = req.params;
+    const funding = await Funding.findById(id);
+    if (!funding) return res.status(404).json({ error: 'Funding not found' });
+
+    // Update fields
     funding.youtube = youtube;
     funding.location = location;
     funding.sector = sector;
@@ -338,8 +529,19 @@ app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
     funding.longDescription = longDescription;
     funding.stage = stage;
 
+    // New fields
+    funding.amountSeeking = amountSeeking;
+    funding.equityOffered = equityOffered;
+    funding.valuation = valuation;
+    funding.fundUsage = fundUsage;
+    funding.minimumInvestment = minimumInvestment;
+    funding.ticketSize = ticketSize;
+    funding.roleProvided = roleProvided;
+    funding.amountRaised = amountRaised;
+
+    // Update logo if provided
     if (req.file) {
-      funding.logoUrl = `/uploads/${req.file.filename}`;
+      funding.logoUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
     }
 
     await funding.save();
@@ -354,9 +556,7 @@ app.put('/api/fundings/:id', upload.single('logo'), async (req, res) => {
 app.get('/api/fundings/:id', async (req, res) => {
   try {
     const funding = await Funding.findById(req.params.id);
-    if (!funding) {
-      return res.status(404).json({ error: 'Funding not found' });
-    }
+    if (!funding) return res.status(404).json({ error: 'Funding not found' });
     res.json(funding);
   } catch (err) {
     console.error('Error fetching funding:', err);
@@ -364,7 +564,7 @@ app.get('/api/fundings/:id', async (req, res) => {
   }
 });
 
-// API Route to Get All Fundings
+// GET all fundings
 app.get("/api/fundings", async (req, res) => {
   try {
     const fundings = await Funding.find();
@@ -446,11 +646,13 @@ app.get('/api/dashboard/:userId', async (req, res) => {
 
     // Fetch funding data based on userId
     const fundings = await Funding.countDocuments({ userId });
+    const jobs = await Job.countDocuments({ userId });
 
     console.log('Fetched funding count:', fundings);  // Log the fetched funding count
 
     res.json({
       fundings,
+      jobs,
     });
   } catch (error) {
     console.error('Error fetching funding data:', error);  // Log the error details
@@ -477,7 +679,15 @@ const jobSchema = new mongoose.Schema({
   dateOfJoining: String,
   languages: [String],
   tools: [String],
+  shortDescription: {
+    type: String,
+    maxlength: 300, // limit short description length
+  },
+  longDescription: {
+    type: String,
+  },
 });
+
 
 const Job = mongoose.model("Job", jobSchema);
 
@@ -491,6 +701,13 @@ app.get("/api/jobs", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
+});
+app.get('/api/jobs/:id', async (req, res) => {
+  const job = await Job.findById(req.params.id);
+  if (!job) {
+    return res.status(404).json({ message: 'Job not found' });
+  }
+  res.json(job);
 });
 
 // Add a job
@@ -528,29 +745,79 @@ app.delete("/api/jobs/:id", async (req, res) => {
   }
 });
 
-
-
-// Define the schema
-const CofounderSchema = new mongoose.Schema({
-  fullName: String,
+const jobAppliedSchema = new mongoose.Schema({
+  name: String,
   email: String,
   phone: String,
-  linkedin: String,
-  location: String,
-  role: String,
-  expertise: String,
-  experience: Number,
-  achievements: String,
-  industries: [String],
-  stagePreference: String,
-  businessModel: String,
-  skills: [String],
-  expectedRole: String,
-  investmentCapacity: Number,
-  cofounderReason: String,
-  resume: String, // File path
+  resumeUrl: String,
+  userId: String,
+  company: String,
+  jobId: String,
+  appliedAt: { type: Date, default: Date.now },
+});
+
+const JobApplied= mongoose.model("JobApplied", jobAppliedSchema);
+app.post("/api/jobapplied/", upload.single("resume"), async (req, res) => {
+  try {
+    const { name, email, phone, userId, company, jobId } = req.body;
+    const resumeUrl = req.file ? `/uploads/${req.file.filename}` : "";
+
+    const newApplication = new JobApplied({
+      name,
+      email,
+      phone,
+      resumeUrl,
+      userId,
+      company,
+      jobId,
+    });
+
+    await newApplication.save();
+    res.status(201).json({ message: "Application submitted successfully" });
+  } catch (error) {
+    console.error("Failed to submit application:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+// Assuming you're using Express and MongoDB
+app.get("/api/jobapplied/:jobId", async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const applications = await JobApplied.find({ jobId }).exec();
+    res.status(200).json(applications);
+  } catch (error) {
+    console.error("Failed to fetch applications:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+
+
+const CofounderSchema = new mongoose.Schema({
+  fullName: { type: String, required: true },
+  email: { type: String, required: true },
+  phoneNumber: { type: String, required: true }, // renamed from phone
+  linkedin: { type: String, required: true },
+  district: { type: String, required: true }, // maps to district
+  employmentStatus: { type: String, enum: ["Employed", "Unemployed", "Student"], required: true },
+  industries: [{ type: String, required: true }],
+  resume: { type: String, required: true }, // path or URL to uploaded file
+
+  // Existing fields kept if still needed later
+  // role: String,
+  // expertise: String,
+  // experience: Number,
+  // achievements: String,
+  // stagePreference: String,
+  // businessModel: String,
+  // skills: [String],
+  // expectedRole: String,
+  // investmentCapacity: Number,
+  // cofounderReason: String,
+
   hold: { type: Boolean, default: true },
-}, { timestamps: true }); // adds createdAt and updatedAt
+}, { timestamps: true });
+
 
   
   const Cofounder = mongoose.model("Cofounder", CofounderSchema);
@@ -631,33 +898,35 @@ app.put("/api/cofounders/:id/status", async (req, res) => {
 
 
 
-  const BusinessSchema = new mongoose.Schema({
-    fullName: String,
-    email: String,
-    phone: String,
-    location: String,
-    role: String,
-    industry: String,
-    experience: Number,
-    skillset: [String],
-    fieldOfStudy: String,
-    businessReason: String,
-    businessStage: String,
-    cofoundingInterest: String,
-    preferredIndustries: [String],
-    budget: String,
-    businessModel: String,
-    challenges: [String],
-    mentorship: String,
-    networking: String,
-    additionalComments: String
-  });
+const BusinessSchema = new mongoose.Schema({
+  fullName: { type: String, required: true },
+  email: { type: String, required: true },
+  phoneNumber: { type: String, required: true },
+  district: { type: String, required: true },
+  linkedin: { type: String },
+  employmentStatus: { type: String, enum: ["Employed", "Unemployed", "Studying"], required: true },
+  cv: { type: String, required: true },
+  date: { type: Date, default: Date.now },
+  status: { type: String, enum: ["new", "processing", "accept"], default: "new" }
+});
+
   
   const Business = mongoose.model("Business", BusinessSchema);
   
-  app.post("/api/businessideationhub", upload.none(), async (req, res) => {
+  app.post("/api/businessideationhub", upload.single("cv"), async (req, res) => {
     try {
-      const businessData = new Business(req.body);
+      const businessData = new Business({
+        fullName: req.body.fullName,
+        email: req.body.email,
+        phoneNumber: req.body.phoneNumber,
+        district: req.body.district,
+        linkedin: req.body.linkedin,
+        employmentStatus: req.body.employmentStatus,
+        cv: req.file ? req.file.path : "", // Save file path
+        date: new Date(), // Set the current date and time
+        status: "new", // Default status
+      });
+  
       await businessData.save();
       res.status(201).json({ message: "Registration successful!" });
     } catch (error) {
@@ -665,52 +934,90 @@ app.put("/api/cofounders/:id/status", async (req, res) => {
       res.status(500).json({ message: "Internal Server Error" });
     }
   });
-
-
-
-
-  // Define Schema
-const BusinessConsultationSchema = new mongoose.Schema({
-    fullName: String,
-    email: String,
-    phone: String,
-    location: String,
-    businessName: String,
-    industry: String,
-    businessStage: String,
-    website: String,
-    consultationNeeds: [String],
-    businessDescription: String,
-    keyChallenges: String,
-    mentorship: String,
-    consultationExpectations: String,
-    preferredDateTime: String,
-    supportingDocuments: [String],
-  });
   
+
+
+
+
+  const BusinessConsultationSchema = new mongoose.Schema(
+    {
+      fullName: { type: String, required: true },
+      email: { type: String, required: true },
+      phone: { type: String, required: true },
+      district: { type: String, required: true },
+      linkedin: { type: String },
+      businessName: { type: String, required: true },
+      businessDescription: { type: String, required: true },
+      website: { type: String, required: true },
+      status: {
+        type: String,
+        enum: ["new","process", "approve"],
+        default: "new",
+      },
+    },
+    {
+      timestamps: true, // ✅ adds createdAt and updatedAt fields
+    }
+  );
+  
+  // Create the model
   const BusinessConsultation = mongoose.model(
     "BusinessConsultation",
     BusinessConsultationSchema
   );
   
   // API Route to handle form submission
-  app.post("/api/businessconsultation", upload.array("supportingDocuments"), async (req, res) => {
+  app.post("/api/businessconsultation", async (req, res) => {
     try {
       const formData = req.body;
-      const uploadedFiles = req.files ? req.files.map((file) => file.path) : [];
+      console.log("Received form data:", formData);
   
-      const newConsultation = new BusinessConsultation({
-        ...formData,
-        supportingDocuments: uploadedFiles,
-      });
+      const requiredFields = [
+        "fullName",
+        "email",
+        "phone",
+        "district",
+        "linkedinProfile",
+        "businessName",
+        "businessDescription",
+        "website",
+      ];
   
+      // Validate required fields
+      const missingFields = requiredFields.filter(
+        (field) => !formData[field]
+      );
+  
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          message: `Missing required fields: ${missingFields.join(", ")}`,
+        });
+      }
+  
+      // Map frontend 'linkedinProfile' to schema 'linkedin'
+      const consultationData = {
+        fullName: formData.fullName,
+        email: formData.email,
+        phone: formData.phone,
+        district: formData.district,
+        linkedin: formData.linkedinProfile,
+        businessName: formData.businessName,
+        businessDescription: formData.businessDescription,
+        website: formData.website,
+        status: "new", // default status
+      };
+  
+      const newConsultation = new BusinessConsultation(consultationData);
       await newConsultation.save();
+  
       res.status(201).json({ message: "Form submitted successfully" });
     } catch (error) {
       console.error("Error saving form data:", error);
       res.status(500).json({ message: "Error submitting form" });
     }
   });
+  
+  
 
 
   // Define Mongoose Schema & Model
@@ -730,7 +1037,7 @@ const solutionSchema = new mongoose.Schema(
     services: [serviceSchema],
     status: {
       type: String,
-      enum: ["new", "updated"],
+      enum: ["new", "processing", "accepted"],
       default: "new",
     },
     registeredAt: {
@@ -765,15 +1072,25 @@ app.get("/api/solutions", async (req, res) => {
   }
 });
 
-// Update solution
 app.put("/api/solutions/:id", async (req, res) => {
-  const updated = await FormData.findByIdAndUpdate(
-    req.params.id,
-    { ...req.body, status: "updated" },
-    { new: true }
-  );
-  res.json(updated);
+  try {
+    // Update with the data from req.body (including status)
+    const updated = await FormData.findByIdAndUpdate(
+      req.params.id,
+      req.body,  // <-- directly use req.body without forcing status
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: "Solution not found" });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update solution", details: error.message });
+  }
 });
+
 
 // ✅ Delete a Record
 app.delete("/api/solutions/:id", async (req, res) => {
@@ -1294,7 +1611,7 @@ const registrationSchema = new mongoose.Schema({
 const EventRegistration = mongoose.model("eventregistration", registrationSchema);
 
 // Route to handle registration
-app.post("/api/register", upload.single("screenshot"), async (req, res) => {
+app.post("/api/eventregister", upload.single("screenshot"), async (req, res) => {
   try {
     const { name, email, phone, eventId, eventName, eventType } = req.body;
 
@@ -1351,6 +1668,32 @@ app.delete("/api/businesses/:id", async (req, res) => {
     res.status(500).json({ message: "Failed to delete cofounder" });
   }
 });
+app.put("/api/businesses/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const allowedStatuses = ["new", "processing", "accept"];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+
+    const updatedBusiness = await Business.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true }
+    );
+
+    if (!updatedBusiness) {
+      return res.status(404).json({ message: "Business not found" });
+    }
+
+    res.json({ message: "Status updated successfully", data: updatedBusiness });
+  } catch (error) {
+    console.error("Error updating business status:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 // GET all businesses-consultation
 app.get("/api/businessesconsulation", async (req, res) => {
@@ -1371,6 +1714,36 @@ app.delete("/api/businessesconsultation/:id", async (req, res) => {
     res.status(500).json({ message: "Failed to delete cofounder" });
   }
 });
+
+app.put("/api/businessconsultation/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // Validate status value if needed
+    const allowedStatuses = ["new", "Processing", "Accepted"];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+
+    // Find and update the status field
+    const updatedConsultation = await BusinessConsultation.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true } // return the updated document
+    );
+
+    if (!updatedConsultation) {
+      return res.status(404).json({ message: "Consultation not found" });
+    }
+
+    res.json({ message: "Status updated successfully", data: updatedConsultation });
+  } catch (error) {
+    console.error("Error updating status:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 
 
