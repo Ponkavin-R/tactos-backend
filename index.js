@@ -7,11 +7,15 @@ require("dotenv").config();
 const nodemailer = require('nodemailer');
 const app = express();
 const PORT = process.env.PORT || 5000;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('cloudinary').v2;
 
 // Middleware
 app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://tactos.in'], // adjust as needed
+  origin: ['http://localhost:3000', 'https://tactos.in','https://tactosadmin.vercel.app'], // adjust as needed
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
@@ -31,6 +35,11 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 // Ensure the 'uploads' folder exists
 const fs = require("fs");
@@ -44,13 +53,16 @@ mongoose
   .then(() => console.log("MongoDB connected successfully"))
   .catch((err) => console.log("MongoDB Connection Error:", err));
 
-// File Storage Configuration
-const storage = multer.diskStorage({
-  destination: "./uploads/",
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
-  },
-});
+  const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: 'uploads',
+      allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'], // Added pdf
+      type: 'upload',
+      resource_type: 'auto', // Important: Allows non-image files like PDFs
+    },
+  });
+  
 
 const upload = multer({ storage });
 
@@ -762,7 +774,7 @@ const JobApplied= mongoose.model("JobApplied", jobAppliedSchema);
 app.post("/api/jobapplied/", upload.single("resume"), async (req, res) => {
   try {
     const { name, email, phone, userId, company, jobId } = req.body;
-    const resumeUrl = req.file ? `/uploads/${req.file.filename}` : "";
+    const resumeUrl = req.file?.path || "";
 
     const newApplication = new JobApplied({
       name,
@@ -1599,16 +1611,20 @@ app.get("/api/events/:id", async (req, res) => {
 });
 
 
-// Mongoose Schema
-const registrationSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true },
-  phone: { type: String, required: true },
-  eventId: { type: String, required: true },
-  eventName: { type: String, default: null },
-  eventType: { type: String, default: null },
-  screenshot: { type: String, default: null },
-});
+const registrationSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    email: { type: String, required: true },
+    phone: { type: String, required: true },
+    eventId: { type: String, required: true },
+    eventName: { type: String, default: null },
+    eventType: { type: String, default: null },
+    screenshot: { type: String, default: null },
+  },
+  {
+    timestamps: true, // This adds createdAt and updatedAt fields automatically
+  }
+);
 
 const EventRegistration = mongoose.model("eventregistration", registrationSchema);
 
@@ -1647,6 +1663,30 @@ app.post("/api/eventregister", upload.single("screenshot"), async (req, res) => 
     res.status(500).json({ error: "Error saving event", detail: err.message });
   }
 });
+// Add this route to your Express backend
+app.get("/api/eventregistrations/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const registrations = await EventRegistration.find({ eventId });
+    res.status(200).json(registrations);
+  } catch (error) {
+    console.error("Error fetching registrations:", error);
+    res.status(500).json({ error: "Failed to fetch registrations." });
+  }
+});
+
+// DELETE /api/eventregistrations/:id
+app.delete("/api/eventregistrations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await EventRegistration.findByIdAndDelete(id);
+    res.status(200).json({ message: "Registration deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting registration:", err);
+    res.status(500).json({ error: "Error deleting registration", detail: err.message });
+  }
+});
+
 
 
 
@@ -1747,6 +1787,381 @@ app.put("/api/businessconsultation/:id", async (req, res) => {
 });
 
 
+//Admin login
+const adminSchema = new mongoose.Schema({
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+  password: {
+    type: String,
+    required: true,
+  },
+});
+const Admin = mongoose.model("Admin", adminSchema);
+
+app.post("/api/adminlogin", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const admin = await Admin.findOne({ email, password }); // Direct match (plain text)
+    if (!admin) return res.status(401).json({ error: "Invalid credentials" });
+
+    res.status(200).json({ message: "Login successful", adminId: admin._id });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/api/admins", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+
+    // Check if email exists
+    const exists = await Admin.findOne({ email });
+    if (exists) return res.status(400).json({ error: "Email already exists" });
+
+    const newAdmin = new Admin({ email, password });
+    await newAdmin.save();
+
+    res.status(201).json(newAdmin);
+  } catch (error) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get All Admins
+app.get('/api/admins', async (req, res) => {
+  try {
+    const admins = await Admin.find();
+    res.status(200).json(admins);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+// Update Admin
+app.put('/api/admins/:id', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const updatedAdmin = await Admin.findByIdAndUpdate(
+      req.params.id,
+      { email, password },
+      { new: true }
+    );
+    if (!updatedAdmin) return res.status(404).json({ error: 'Admin not found' });
+    res.status(200).json(updatedAdmin);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete Admin
+app.delete('/api/admins/:id', async (req, res) => {
+  try {
+    const deletedAdmin = await Admin.findByIdAndDelete(req.params.id);
+    if (!deletedAdmin) return res.status(404).json({ error: 'Admin not found' });
+    res.status(200).json({ message: 'Admin deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 
+
+//add data
+
+const stageSchema = new mongoose.Schema({
+  stageName: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+  },
+}, { timestamps: true });
+
+const Stage=mongoose.model('Stage', stageSchema);
+// CREATE a new stage
+app.post('/api/stage', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const newStage = new Stage({ stageName });
+    const savedStage = await newStage.save();
+    res.status(201).json(savedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to create stage', details: err.message });
+  }
+});
+
+// READ all stages
+app.get('/api/stage', async (req, res) => {
+  try {
+    const stages = await Stage.find().sort({ createdAt: -1 });
+    res.status(200).json(stages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stages' });
+  }
+});
+
+// UPDATE a stage by ID
+app.put('/api/stage/:id', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const updatedStage = await Stage.findByIdAndUpdate(
+      req.params.id,
+      { stageName },
+      { new: true }
+    );
+    if (!updatedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json(updatedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to update stage', details: err.message });
+  }
+});
+
+// DELETE a stage by ID
+app.delete('/api/stage/:id', async (req, res) => {
+  try {
+    const deletedStage = await Stage.findByIdAndDelete(req.params.id);
+    if (!deletedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json({ message: 'Stage deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete stage' });
+  }
+});
+
+const sectorSchema = new mongoose.Schema({
+  sectorName: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+  },
+}, { timestamps: true });
+
+const Sector=mongoose.model('Sector', sectorSchema);
+// CREATE a new stage
+app.post('/api/sector', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const newStage = new Sector({ stageName });
+    const savedStage = await newStage.save();
+    res.status(201).json(savedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to create stage', details: err.message });
+  }
+});
+
+// READ all stages
+app.get('/api/sector', async (req, res) => {
+  try {
+    const stages = await Sector.find().sort({ createdAt: -1 });
+    res.status(200).json(stages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stages' });
+  }
+});
+
+// UPDATE a stage by ID
+app.put('/api/sector/:id', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const updatedStage = await Sector.findByIdAndUpdate(
+      req.params.id,
+      { stageName },
+      { new: true }
+    );
+    if (!updatedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json(updatedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to update stage', details: err.message });
+  }
+});
+
+// DELETE a stage by ID
+app.delete('/api/sector/:id', async (req, res) => {
+  try {
+    const deletedStage = await Sector.findByIdAndDelete(req.params.id);
+    if (!deletedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json({ message: 'Stage deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete stage' });
+  }
+});
+
+const startupstageSchema = new mongoose.Schema({
+  stageName: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+  },
+}, { timestamps: true });
+
+const StartupStage=mongoose.model('StartupStage', startupstageSchema);
+// CREATE a new stage
+app.post('/api/startupstage', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const newStage = new StartupStage({ stageName });
+    const savedStage = await newStage.save();
+    res.status(201).json(savedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to create stage', details: err.message });
+  }
+});
+
+// READ all stages
+app.get('/api/startupstage', async (req, res) => {
+  try {
+    const stages = await StartupStage.find().sort({ createdAt: -1 });
+    res.status(200).json(stages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stages' });
+  }
+});
+
+// UPDATE a stage by ID
+app.put('/api/startupstage/:id', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const updatedStage = await StartupStage.findByIdAndUpdate(
+      req.params.id,
+      { stageName },
+      { new: true }
+    );
+    if (!updatedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json(updatedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to update stage', details: err.message });
+  }
+});
+
+// DELETE a stage by ID
+app.delete('/api/startupstage/:id', async (req, res) => {
+  try {
+    const deletedStage = await StartupStage.findByIdAndDelete(req.params.id);
+    if (!deletedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json({ message: 'Stage deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete stage' });
+  }
+});
+
+const industory = new mongoose.Schema({
+  stageName: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+  },
+}, { timestamps: true });
+
+const Industory=mongoose.model('Industory', industory);
+// CREATE a new stage
+app.post('/api/industory', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const newStage = new Industory({ stageName });
+    const savedStage = await newStage.save();
+    res.status(201).json(savedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to create stage', details: err.message });
+  }
+});
+
+// READ all stages
+app.get('/api/industory', async (req, res) => {
+  try {
+    const stages = await Industory.find().sort({ createdAt: -1 });
+    res.status(200).json(stages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stages' });
+  }
+});
+
+// UPDATE a stage by ID
+app.put('/api/industory/:id', async (req, res) => {
+  try {
+    const { stageName } = req.body;
+    const updatedStage = await Industory.findByIdAndUpdate(
+      req.params.id,
+      { stageName },
+      { new: true }
+    );
+    if (!updatedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json(updatedStage);
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to update stage', details: err.message });
+  }
+});
+
+// DELETE a stage by ID
+app.delete('/api/industory/:id', async (req, res) => {
+  try {
+    const deletedStage = await Industory.findByIdAndDelete(req.params.id);
+    if (!deletedStage) return res.status(404).json({ error: 'Stage not found' });
+    res.status(200).json({ message: 'Stage deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete stage' });
+  }
+});
+
+
+const investorToggleSchema = new mongoose.Schema({
+  enabled: {
+    type: Boolean,
+    default: false,
+  },
+});
+
+const InvestorToggle=mongoose.model("InvestorToggle", investorToggleSchema);
+
+app.get("/api/investortoggle", async (req, res) => {
+  let toggle = await InvestorToggle.findOne();
+  if (!toggle) {
+    toggle = await InvestorToggle.create({ enabled: false });
+  }
+  res.json(toggle);
+});
+
+// PUT update toggle state
+app.put("/api/investortoggle", async (req, res) => {
+  let toggle = await InvestorToggle.findOne();
+  if (!toggle) {
+    toggle = new InvestorToggle();
+  }
+  toggle.enabled = req.body.enabled;
+  await toggle.save();
+  res.json(toggle);
+});
+
+
+const ClientSchema = new mongoose.Schema({
+  enabled: {
+    type: Boolean,
+    default: false,
+  },
+});
+
+const Clientsay=mongoose.model("Clientsay", ClientSchema);
+
+app.get("/api/clientsay", async (req, res) => {
+  let toggle = await Clientsay.findOne();
+  if (!toggle) {
+    toggle = await Clientsay.create({ enabled: false });
+  }
+  res.json(toggle);
+});
+
+// PUT update toggle state
+app.put("/api/clientsay", async (req, res) => {
+  let toggle = await Clientsay.findOne();
+  if (!toggle) {
+    toggle = new Clientsay();
+  }
+  toggle.enabled = req.body.enabled;
+  await toggle.save();
+  res.json(toggle);
+});
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
